@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="{{ blog.lang|default:'en' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ blog.title }}</title>
+    <meta name="description" content="{{ blog.summary }}">
+    {% if blog.photo_url %}<meta property="og:image" content="{{ blog.photo_url }}">{% endif %}
+</head>
+<body>
+    <article>
+        {% if blog.photo_url %}
+        <img src="{{ blog.photo_url }}" alt="{{ blog.title }}">
+        {% endif %}
+        <h1>{{ blog.title }}</h1>
+        {% if blog.release_date %}<time>{{ blog.release_date }}</time>{% endif %}
+        {% if blog.summary %}<p class="summary">{{ blog.summary }}</p>{% endif %}
+        <div class="content">{{ blog.content|safe }}</div>
+        {% if blog.tags %}
+        <div class="tags">
+            {% for tag in blog.tags %}<span class="tag">{{ tag }}</span>{% endfor %}
+        </div>
+        {% endif %}
+    </article>
+</body>
+</html>
