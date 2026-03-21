@@ -1,12 +1,15 @@
 import json
 
-from django.http import JsonResponse, Http404
+import mistune
+from django.http import Http404, JsonResponse
 from django.shortcuts import render
+from django.utils import translation
+from django.utils.translation import get_language
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST, require_GET
+from django.views.decorators.http import require_GET, require_POST
 
 from . import settings as app_settings
-from .cache import get_blog, set_blog, delete_blog, get_list_page
+from .cache import delete_blog, get_blog, get_list_page, set_blog
 
 
 def _check_token(request):
@@ -24,45 +27,78 @@ def _check_token(request):
 # Public views
 # ---------------------------------------------------------------------------
 
+
 @require_GET
 def blog_detail(request, slug):
-    """Serve a single blog post from cache."""
+    """
+    Serve a single blog post from cache.
+
+    - Activates the blog's language via translation.activate()
+    - Renders markdown content to HTML
+    - Passes lang_slugs for language switcher
+    """
     blog = get_blog(slug)
     if blog is None:
         raise Http404("Blog not found")
-    return render(request, app_settings.TEMPLATE, {"blog": blog})
+
+    lang = blog.get("lang", "en")
+    translation.activate(lang)
+
+    # Render markdown → HTML
+    content_html = ""
+    if blog.get("content"):
+        content_html = mistune.html(blog["content"])
+
+    lang_slugs = blog.get("lang_slugs", {})
+
+    return render(request, app_settings.TEMPLATE, {
+        "blog": blog,
+        "content_html": content_html,
+        "title": blog.get("title", ""),
+        "description": blog.get("summary", ""),
+        "lang_slugs": lang_slugs,
+        "lang_slugs_json": json.dumps(lang_slugs),
+    })
 
 
 @require_GET
-def blog_list(request, lang):
+def blog_list(request):
     """
-    Paginated blog listing page for a specific language.
+    Paginated blog listing page.
 
-    URL: /<lang>/
+    Language is determined by Django's i18n (URL prefix / session / cookie).
+    Include this URL inside i18n_patterns for automatic language detection.
+
     Query params:
         page — page number (default 1)
     """
+    lang = get_language() or "en"
     page = int(request.GET.get("page", 1))
     data = get_list_page(lang, page)
     blogs = data.get("blogs", [])
     total_pages = data.get("pages", 1)
 
-    return render(request, app_settings.LIST_TEMPLATE, {
-        "blogs": blogs,
-        "lang": lang,
-        "page": page,
-        "total_pages": total_pages,
-        "total": data.get("total", 0),
-        "has_previous": page > 1,
-        "has_next": page < total_pages,
-        "previous_page": page - 1,
-        "next_page": page + 1,
-    })
+    return render(
+        request,
+        app_settings.LIST_TEMPLATE,
+        {
+            "blogs": blogs,
+            "lang": lang,
+            "page": page,
+            "total_pages": total_pages,
+            "total": data.get("total", 0),
+            "has_previous": page > 1,
+            "has_next": page < total_pages,
+            "previous_page": page - 1,
+            "next_page": page + 1,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
 # API endpoints (called by aiblog project)
 # ---------------------------------------------------------------------------
+
 
 @csrf_exempt
 @require_POST
@@ -80,11 +116,12 @@ def api_push(request):
         "photo_url": "https://...",
         "release_date": "2025-01-01T00:00:00Z",
         "tags": ["tag1", "tag2"],
+        "lang_slugs": {"en": "my-blog-post", "tr": "blog-yazim"},
         "social_media_post": "..."
     }
 
     If same slug exists, it will be overwritten.
-    Also bumps list version → listing cache is invalidated.
+    Triggers background cache refresh for all known languages.
     """
     if not _check_token(request):
         return JsonResponse({"error": "Unauthorized"}, status=401)
