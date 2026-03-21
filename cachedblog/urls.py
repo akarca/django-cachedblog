@@ -10,6 +10,6 @@ urlpatterns = [
     path("api/bulk-push/", views.api_bulk_push, name="api_bulk_push"),
     path("api/delete/", views.api_delete, name="api_delete"),
     # Public — listing per language, detail by slug
-    path("<str:lang>/", views.blog_list, name="blog_list"),
+    path("/blog/<str:lang>/", views.blog_list, name="blog_list"),
     path("<slug:slug>/", views.blog_detail, name="blog_detail"),
 ]
