@@ -11,6 +11,7 @@ On push/delete, listings for ALL known languages are proactively refreshed
 in a background thread — no user request needed to warm the cache.
 """
 
+import hashlib
 import json
 import logging
 import threading
@@ -48,6 +49,10 @@ def _list_pages_key(lang):
     return f"cachedblog:list_pages:{lang}"
 
 
+def _hashes_key():
+    return "cachedblog:hashes"
+
+
 # ---------------------------------------------------------------------------
 # Known languages tracking
 # ---------------------------------------------------------------------------
@@ -78,6 +83,47 @@ def _get_max_pages(lang):
 # Detail cache (individual blog posts)
 # ---------------------------------------------------------------------------
 
+def blog_hash(data):
+    """Compute md5 hash for a blog dict. Must match aiblog's push.blog_hash()."""
+    parts = [
+        data.get("slug", ""),
+        data.get("title", ""),
+        data.get("summary", ""),
+        data.get("content", ""),
+        data.get("photo_url", ""),
+        data.get("lang", ""),
+        data.get("release_date", ""),
+        json.dumps(data.get("tags", []), sort_keys=True),
+        json.dumps(data.get("lang_slugs", {}), sort_keys=True),
+    ]
+    raw = "|".join(parts).encode("utf-8")
+    return hashlib.md5(raw).hexdigest()
+
+
+def get_all_hashes():
+    """Return {slug: md5_hash} for all cached blogs."""
+    raw = _cache().get(_hashes_key())
+    if raw is None:
+        return {}
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
+def _update_hash(slug, data):
+    """Update the hash for a single blog slug."""
+    c = _cache()
+    hashes = get_all_hashes()
+    hashes[slug] = blog_hash(data)
+    c.set(_hashes_key(), json.dumps(hashes), None)  # never expires
+
+
+def _remove_hash(slug):
+    """Remove hash for a deleted slug."""
+    c = _cache()
+    hashes = get_all_hashes()
+    hashes.pop(slug, None)
+    c.set(_hashes_key(), json.dumps(hashes), None)
+
+
 def get_blog(slug):
     """Return blog dict from cache or None."""
     data = _cache().get(_detail_key(slug))
@@ -93,6 +139,7 @@ def set_blog(slug, data, refresh=True):
         json.dumps(data, ensure_ascii=False),
         app_settings.CACHE_TIMEOUT,
     )
+    _update_hash(slug, data)
     lang = data.get("lang")
     if lang:
         _track_lang(lang)
@@ -103,6 +150,7 @@ def set_blog(slug, data, refresh=True):
 def delete_blog(slug):
     """Remove blog from cache and trigger background list refresh."""
     _cache().delete(_detail_key(slug))
+    _remove_hash(slug)
     _refresh_all_lists_async()
 
 

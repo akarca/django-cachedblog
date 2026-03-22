@@ -9,7 +9,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from . import settings as app_settings
-from .cache import delete_blog, get_blog, get_list_page, set_blog, _refresh_all_lists_async
+from .cache import delete_blog, get_all_hashes, get_blog, get_list_page, set_blog, _refresh_all_lists_async
 
 
 def _check_token(request):
@@ -204,3 +204,18 @@ def api_delete(request):
 
     delete_blog(slug)
     return JsonResponse({"status": "ok", "slug": slug})
+
+
+@require_GET
+def api_hashes(request):
+    """
+    Return md5 hashes for all cached blogs.
+
+    Response: {"hashes": {"slug1": "md5...", "slug2": "md5...", ...}}
+
+    Used by aiblog's push_blogs --site X to diff and push only changed blogs.
+    """
+    if not _check_token(request):
+        return JsonResponse({"error": "Unauthorized"}, status=401)
+
+    return JsonResponse({"hashes": get_all_hashes()})
