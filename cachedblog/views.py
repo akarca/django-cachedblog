@@ -9,7 +9,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from . import settings as app_settings
-from .cache import delete_blog, get_blog, get_list_page, set_blog
+from .cache import delete_blog, get_blog, get_list_page, set_blog, _refresh_all_lists_async
 
 
 def _check_token(request):
@@ -169,8 +169,12 @@ def api_bulk_push(request):
     for blog_data in blogs:
         slug = blog_data.get("slug")
         if slug:
-            set_blog(slug, blog_data)
+            set_blog(slug, blog_data, refresh=False)
             saved += 1
+
+    # Single refresh after all blogs are stored
+    if saved:
+        _refresh_all_lists_async()
 
     return JsonResponse({"status": "ok", "saved": saved})
 

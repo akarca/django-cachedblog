@@ -86,8 +86,8 @@ def get_blog(slug):
     return json.loads(data) if isinstance(data, str) else data
 
 
-def set_blog(slug, data):
-    """Store blog dict in cache and trigger background list refresh."""
+def set_blog(slug, data, refresh=True):
+    """Store blog dict in cache. Triggers background list refresh unless refresh=False."""
     _cache().set(
         _detail_key(slug),
         json.dumps(data, ensure_ascii=False),
@@ -96,7 +96,8 @@ def set_blog(slug, data):
     lang = data.get("lang")
     if lang:
         _track_lang(lang)
-    _refresh_all_lists_async()
+    if refresh:
+        _refresh_all_lists_async()
 
 
 def delete_blog(slug):
@@ -152,13 +153,32 @@ def _store_list_page(lang, page, data):
 
 
 # ---------------------------------------------------------------------------
-# Proactive refresh (background thread)
+# Proactive refresh (background thread, deduplicated)
 # ---------------------------------------------------------------------------
 
+_refresh_lock = threading.Lock()
+_refresh_running = False
+
+
 def _refresh_all_lists_async():
-    """Spawn a background thread to refresh listing cache for all known languages."""
-    t = threading.Thread(target=_refresh_all_lists, daemon=True)
+    """Spawn a background thread to refresh listing cache. Skips if already running."""
+    global _refresh_running
+    with _refresh_lock:
+        if _refresh_running:
+            return
+        _refresh_running = True
+    t = threading.Thread(target=_refresh_all_lists_guarded, daemon=True)
     t.start()
+
+
+def _refresh_all_lists_guarded():
+    """Wrapper that resets the running flag when done."""
+    global _refresh_running
+    try:
+        _refresh_all_lists()
+    finally:
+        with _refresh_lock:
+            _refresh_running = False
 
 
 def _refresh_all_lists():
