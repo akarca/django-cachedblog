@@ -1,8 +1,0 @@
-Metadata-Version: 2.4
-Name: django-cachedblog
-Version: 0.1.0
-Summary: A Django app that serves blog posts entirely from cache, fed by an external CMS via API.
-Author: Serdar Akarca
-Requires-Python: >=3.10
-Requires-Dist: Django>=4.2
-Dynamic: author
