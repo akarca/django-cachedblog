@@ -300,7 +300,8 @@ def _fetch_list_from_source(lang, page, tag=None):
 
     url = f"{base}/api/blogs/{site}/?lang={lang}&page={page}&items={items}"
     if tag:
-        url += f"&tag={tag}"
+        from urllib.parse import quote
+        url += f"&tag={quote(tag)}"
 
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
