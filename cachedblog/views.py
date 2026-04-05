@@ -52,9 +52,16 @@ def blog_detail(request, slug):
 
     lang_slugs = blog.get("lang_slugs", {})
 
+    # Parse release_date string to datetime for template |date filter
+    release_date = None
+    if blog.get("release_date"):
+        from django.utils.dateparse import parse_datetime
+        release_date = parse_datetime(blog["release_date"])
+
     return render(request, app_settings.TEMPLATE, {
         "blog": blog,
         "content_html": content_html,
+        "release_date": release_date,
         "title": blog.get("title", ""),
         "description": blog.get("summary", ""),
         "lang_slugs": lang_slugs,
