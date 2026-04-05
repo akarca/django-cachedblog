@@ -47,8 +47,7 @@ def blog_detail(request, slug):
     # Render markdown → HTML
     content_html = ""
     if blog.get("content"):
-        md = mistune.create_markdown()
-        content_html = md(blog["content"])
+        content_html = mistune.html(blog["content"])
 
     lang_slugs = blog.get("lang_slugs", {})
 
