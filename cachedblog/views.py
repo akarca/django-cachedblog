@@ -71,7 +71,7 @@ def blog_detail(request, slug):
 
 
 @require_GET
-def blog_list(request):
+def blog_list(request, tag=None, template=None):
     """
     Paginated blog listing page.
 
@@ -80,20 +80,25 @@ def blog_list(request):
 
     Query params:
         page — page number (default 1)
+
+    Args:
+        tag — filter by tag name (e.g. "faq", "knowledge base")
+        template — override template (default: LIST_TEMPLATE)
     """
     lang = get_language() or "en"
     page = int(request.GET.get("page", 1))
-    data = get_list_page(lang, page)
+    data = get_list_page(lang, page, tag=tag)
     blogs = data.get("blogs", [])
     total_pages = data.get("pages", 1)
 
     return render(
         request,
-        app_settings.LIST_TEMPLATE,
+        template or app_settings.LIST_TEMPLATE,
         {
             "blogs": blogs,
             "lang": lang,
             "page": page,
+            "tag": tag,
             "total_pages": total_pages,
             "total": data.get("total", 0),
             "has_previous": page > 1,

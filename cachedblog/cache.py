@@ -173,7 +173,7 @@ def delete_blog(slug):
 # List cache (paginated blog listing, per language)
 # ---------------------------------------------------------------------------
 
-def get_list_page(lang, page=1):
+def get_list_page(lang, page=1, tag=None):
     """
     Get paginated blog listing for a specific language.
     Returns from cache — should already be warm from proactive refresh.
@@ -182,16 +182,26 @@ def get_list_page(lang, page=1):
     Returns: {"blogs": [...], "page": N, "total": N, "pages": N, "items": N}
     """
     c = _cache()
-    cached_data = c.get(_list_key(lang, page))
+    cache_key = _list_key(lang, page) if not tag else f"cachedblog:list:{lang}:{tag}:{page}"
+    cached_data = c.get(cache_key)
 
     if cached_data:
         return json.loads(cached_data) if isinstance(cached_data, str) else cached_data
 
     # Cold cache — fetch from source (first request or after cache eviction)
     _track_lang(lang)
-    fresh = _fetch_list_from_source(lang, page)
+    fresh = _fetch_list_from_source(lang, page, tag=tag)
     if fresh is not None:
-        _store_list_page(lang, page, fresh)
+        if tag:
+            c.set(cache_key, json.dumps(fresh, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+            for blog_data in fresh.get("blogs", []):
+                _render_markdown_fields(blog_data)
+                slug = blog_data.get("slug")
+                if slug:
+                    c.set(_detail_key(slug), json.dumps(blog_data, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+            c.set(cache_key, json.dumps(fresh, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+        else:
+            _store_list_page(lang, page, fresh)
         return fresh
 
     return {"blogs": [], "page": page, "total": 0, "pages": 0, "items": app_settings.LIST_ITEMS}
@@ -277,7 +287,7 @@ def _refresh_all_lists():
 # Source fetch
 # ---------------------------------------------------------------------------
 
-def _fetch_list_from_source(lang, page):
+def _fetch_list_from_source(lang, page, tag=None):
     """Fetch paginated blog list from aiblog API."""
     base = app_settings.SOURCE_URL.rstrip("/")
     site = app_settings.SOURCE_SITE
@@ -289,6 +299,8 @@ def _fetch_list_from_source(lang, page):
         return None
 
     url = f"{base}/api/blogs/{site}/?lang={lang}&page={page}&items={items}"
+    if tag:
+        url += f"&tag={tag}"
 
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
