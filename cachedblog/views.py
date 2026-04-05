@@ -44,16 +44,11 @@ def blog_detail(request, slug):
     lang = blog.get("lang", "en")
     translation.activate(lang)
 
-    # Pass content as-is (already HTML from aiblog)
-    # Only render markdown if content doesn't look like HTML
+    # Render markdown to HTML (mistune preserves existing HTML tags)
     content_html = ""
     if blog.get("content"):
-        content = blog["content"]
-        if "<p>" in content or "<h" in content or "<div" in content:
-            content_html = content
-        else:
-            md = mistune.create_markdown()
-            content_html = md(content)
+        md = mistune.create_markdown()
+        content_html = md(blog["content"])
 
     lang_slugs = blog.get("lang_slugs", {})
 
