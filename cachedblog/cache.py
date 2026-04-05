@@ -18,9 +18,12 @@ import threading
 import urllib.request
 import urllib.error
 
+import mistune
 from django.core.cache import caches
 
 from . import settings as app_settings
+
+_md = mistune.create_markdown()
 
 logger = logging.getLogger("cachedblog")
 
@@ -124,6 +127,17 @@ def _remove_hash(slug):
     c.set(_hashes_key(), json.dumps(hashes), None)
 
 
+def _render_markdown_fields(data):
+    """Render markdown in summary and content fields to HTML (in-place)."""
+    summary = data.get("summary")
+    if summary and "<p>" not in summary:
+        data["summary"] = _md(summary).strip()
+    content = data.get("content")
+    if content and "<p>" not in content:
+        data["content"] = _md(content).strip()
+    return data
+
+
 def get_blog(slug):
     """Return blog dict from cache or None."""
     data = _cache().get(_detail_key(slug))
@@ -134,6 +148,7 @@ def get_blog(slug):
 
 def set_blog(slug, data, refresh=True):
     """Store blog dict in cache. Triggers background list refresh unless refresh=False."""
+    _render_markdown_fields(data)
     _cache().set(
         _detail_key(slug),
         json.dumps(data, ensure_ascii=False),
@@ -189,8 +204,9 @@ def _store_list_page(lang, page, data):
     # Remember max pages for this lang
     total_pages = data.get("pages", 1)
     c.set(_list_pages_key(lang), total_pages, app_settings.CACHE_TIMEOUT)
-    # Warm detail cache for every blog in the page
+    # Render markdown and warm detail cache for every blog in the page
     for blog_data in data.get("blogs", []):
+        _render_markdown_fields(blog_data)
         slug = blog_data.get("slug")
         if slug:
             c.set(
@@ -198,6 +214,8 @@ def _store_list_page(lang, page, data):
                 json.dumps(blog_data, ensure_ascii=False),
                 app_settings.CACHE_TIMEOUT,
             )
+    # Re-store list page with rendered markdown
+    c.set(_list_key(lang, page), json.dumps(data, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
 
 
 # ---------------------------------------------------------------------------

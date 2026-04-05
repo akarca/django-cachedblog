@@ -44,11 +44,12 @@ def blog_detail(request, slug):
     lang = blog.get("lang", "en")
     translation.activate(lang)
 
-    # Render markdown to HTML (mistune preserves existing HTML tags)
-    content_html = ""
-    if blog.get("content"):
+    # Content is already rendered to HTML in cache layer (_render_markdown_fields)
+    # Fallback rendering for any content that wasn't pre-rendered
+    content_html = blog.get("content", "")
+    if content_html and "<p>" not in content_html:
         md = mistune.create_markdown()
-        content_html = md(blog["content"])
+        content_html = md(content_html)
 
     lang_slugs = blog.get("lang_slugs", {})
 
