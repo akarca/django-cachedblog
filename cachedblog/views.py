@@ -38,11 +38,14 @@ def blog_detail(request, slug):
     - Passes lang_slugs for language switcher
     """
     from .cache import _cache, _detail_key
+    from django.utils.translation import get_language
+
     blog = get_blog(slug)
 
     # Resolve cross-language slug alias: if user visited /en/<tr-slug>/,
     # the alias map points to the canonical slug (tr or en, whichever
-    # was pushed first). Look up the canonical blog and re-translate.
+    # was pushed first). Find the canonical blog, then try to serve
+    # the language version matching the URL prefix.
     if blog is None:
         c = _cache()
         primary = c.get(f"cachedblog:slug_alias:{slug}")
@@ -51,6 +54,17 @@ def blog_detail(request, slug):
 
     if blog is None:
         raise Http404("Blog not found")
+
+    # If the request is in a non-canonical lang, prefer the version
+    # in that lang (so /en/<tr-slug>/ shows the en translation).
+    req_lang = get_language() or "en"
+    blog_lang = blog.get("lang", "en")
+    if req_lang != blog_lang:
+        alt_slug = (blog.get("lang_slugs") or {}).get(req_lang)
+        if alt_slug:
+            alt_blog = get_blog(alt_slug)
+            if alt_blog:
+                blog = alt_blog
 
     lang = blog.get("lang", "en")
     translation.activate(lang)
