@@ -158,8 +158,38 @@ def set_blog(slug, data, refresh=True):
     lang = data.get("lang")
     if lang:
         _track_lang(lang)
+        _add_to_list_cache(slug, data, lang)
     if refresh:
         _refresh_all_lists_async()
+
+
+def _add_to_list_cache(slug, data, lang):
+    """Prepend the new blog to the list cache for `lang` page 1 so it
+    shows up immediately without waiting for the background source refresh.
+    """
+    c = _cache()
+    list_key = _list_key(lang, 1)
+    raw = c.get(list_key)
+    if isinstance(raw, str):
+        try:
+            existing = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            existing = {"blogs": [], "page": 1, "total": 0, "pages": 1, "items": 20}
+    elif isinstance(raw, dict):
+        existing = raw
+    else:
+        existing = {"blogs": [], "page": 1, "total": 0, "pages": 1, "items": 20}
+
+    # Remove any existing copy of this slug, then prepend
+    blogs = [b for b in existing.get("blogs", []) if b.get("slug") != slug]
+    blogs.insert(0, data)
+    items = existing.get("items") or app_settings.LIST_ITEMS
+    existing["blogs"] = blogs[:items]
+    existing["items"] = items
+    existing["total"] = max(existing.get("total", 0), len(blogs))
+    existing["pages"] = max(1, (existing["total"] + items - 1) // items)
+
+    c.set(list_key, json.dumps(existing, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
 
 
 def delete_blog(slug):
