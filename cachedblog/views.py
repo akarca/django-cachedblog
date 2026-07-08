@@ -37,7 +37,18 @@ def blog_detail(request, slug):
     - Renders markdown content to HTML
     - Passes lang_slugs for language switcher
     """
+    from .cache import _cache, _detail_key
     blog = get_blog(slug)
+
+    # Resolve cross-language slug alias: if user visited /en/<tr-slug>/,
+    # the alias map points to the canonical slug (tr or en, whichever
+    # was pushed first). Look up the canonical blog and re-translate.
+    if blog is None:
+        c = _cache()
+        primary = c.get(f"cachedblog:slug_alias:{slug}")
+        if primary:
+            blog = get_blog(primary)
+
     if blog is None:
         raise Http404("Blog not found")
 

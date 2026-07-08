@@ -159,8 +159,25 @@ def set_blog(slug, data, refresh=True):
     if lang:
         _track_lang(lang)
         _add_to_list_cache(slug, data, lang)
+        _register_slug_aliases(slug, data)
     if refresh:
         _refresh_all_lists_async()
+
+
+def _register_slug_aliases(primary_slug, data):
+    """Register alternate-language slugs as aliases of primary_slug.
+
+    Lets blog_detail redirect any-lang slug to the same canonical blog.
+    Stores cachedblog:slug_alias:<any-slug> = primary_slug.
+    """
+    c = _cache()
+    for alt_lang, alt_slug in (data.get("lang_slugs") or {}).items():
+        if alt_slug and alt_slug != primary_slug:
+            c.set(
+                f"cachedblog:slug_alias:{alt_slug}",
+                primary_slug,
+                app_settings.CACHE_TIMEOUT,
+            )
 
 
 def _add_to_list_cache(slug, data, lang):
