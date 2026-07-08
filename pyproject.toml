@@ -7,7 +7,7 @@ name = "django-cachedblog"
 version = "0.1.0"
 description = "A Django app that serves blog posts entirely from cache, fed by an external CMS via API."
 requires-python = ">=3.10"
-dependencies = ["Django>=4.2,<6"]
+dependencies = ["Django>=4.2,<7"]
 
 [tool.setuptools.packages.find]
 include = ["cachedblog*"]
