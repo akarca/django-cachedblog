@@ -28,6 +28,10 @@ _md = mistune.create_markdown()
 
 logger = logging.getLogger("cachedblog")
 
+# Timeout for source fetch (seconds). Keep it generous to avoid false
+# "failed to fetch" reports when aiblog is just a bit slow.
+_SOURCE_FETCH_TIMEOUT = 30
+
 
 def _cache():
     return caches[app_settings.CACHE_ALIAS]
@@ -64,23 +68,33 @@ def _hashes_key():
 def _track_lang(lang):
     """Add lang to the set of known languages."""
     c = _cache()
-    raw = c.get(_langs_key())
-    langs = set(json.loads(raw)) if raw else set()
-    if lang not in langs:
-        langs.add(lang)
-        c.set(_langs_key(), json.dumps(sorted(langs)), None)
+    try:
+        raw = c.get(_langs_key())
+        langs = set(json.loads(raw)) if raw else set()
+        if lang not in langs:
+            langs.add(lang)
+            c.set(_langs_key(), json.dumps(sorted(langs)), None)
+    except Exception:
+        # Cache unavailable (e.g. Redis timeout) — skip gracefully
+        pass
 
 
 def _get_known_langs():
     """Return set of known languages."""
-    raw = _cache().get(_langs_key())
-    return set(json.loads(raw)) if raw else set()
+    try:
+        raw = _cache().get(_langs_key())
+        return set(json.loads(raw)) if raw else set()
+    except Exception:
+        return set()
 
 
 def _get_max_pages(lang):
     """Return last known max page count for a language."""
-    v = _cache().get(_list_pages_key(lang))
-    return int(v) if v else 1
+    try:
+        v = _cache().get(_list_pages_key(lang))
+        return int(v) if v else 1
+    except Exception:
+        return 1
 
 
 # ---------------------------------------------------------------------------
@@ -106,26 +120,37 @@ def blog_hash(data):
 
 def get_all_hashes():
     """Return {slug: md5_hash} for all cached blogs."""
-    raw = _cache().get(_hashes_key())
-    if raw is None:
+    try:
+        raw = _cache().get(_hashes_key())
+        if raw is None:
+            return {}
+        return json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
         return {}
-    return json.loads(raw) if isinstance(raw, str) else raw
 
 
 def _update_hash(slug, data):
     """Update the hash for a single blog slug."""
-    c = _cache()
-    hashes = get_all_hashes()
-    hashes[slug] = blog_hash(data)
-    c.set(_hashes_key(), json.dumps(hashes), None)  # never expires
+    try:
+        c = _cache()
+        hashes = get_all_hashes()
+        hashes[slug] = blog_hash(data)
+        c.set(_hashes_key(), json.dumps(hashes), None)  # never expires
+    except Exception:
+        # Cache unavailable — skip gracefully
+        pass
 
 
 def _remove_hash(slug):
     """Remove hash for a deleted slug."""
-    c = _cache()
-    hashes = get_all_hashes()
-    hashes.pop(slug, None)
-    c.set(_hashes_key(), json.dumps(hashes), None)
+    try:
+        c = _cache()
+        hashes = get_all_hashes()
+        hashes.pop(slug, None)
+        c.set(_hashes_key(), json.dumps(hashes), None)
+    except Exception:
+        # Cache unavailable — skip gracefully
+        pass
 
 
 def _render_markdown_fields(data):
@@ -141,20 +166,28 @@ def _render_markdown_fields(data):
 
 def get_blog(slug):
     """Return blog dict from cache or None."""
-    data = _cache().get(_detail_key(slug))
-    if data is None:
+    try:
+        data = _cache().get(_detail_key(slug))
+        if data is None:
+            return None
+        return json.loads(data) if isinstance(data, str) else data
+    except Exception:
+        # Cache unavailable — fall through to 404 instead of 500
         return None
-    return json.loads(data) if isinstance(data, str) else data
 
 
 def set_blog(slug, data, refresh=True):
     """Store blog dict in cache. Triggers background list refresh unless refresh=False."""
     _render_markdown_fields(data)
-    _cache().set(
-        _detail_key(slug),
-        json.dumps(data, ensure_ascii=False),
-        app_settings.CACHE_TIMEOUT,
-    )
+    try:
+        _cache().set(
+            _detail_key(slug),
+            json.dumps(data, ensure_ascii=False),
+            app_settings.CACHE_TIMEOUT,
+        )
+    except Exception:
+        # Cache unavailable — continue without caching
+        pass
     _update_hash(slug, data)
     lang = data.get("lang")
     if lang:
@@ -171,48 +204,59 @@ def _register_slug_aliases(primary_slug, data):
     Lets blog_detail redirect any-lang slug to the same canonical blog.
     Stores cachedblog:slug_alias:<any-slug> = primary_slug.
     """
-    c = _cache()
-    for alt_lang, alt_slug in (data.get("lang_slugs") or {}).items():
-        if alt_slug and alt_slug != primary_slug:
-            c.set(
-                f"cachedblog:slug_alias:{alt_slug}",
-                primary_slug,
-                app_settings.CACHE_TIMEOUT,
-            )
+    try:
+        c = _cache()
+        for alt_lang, alt_slug in (data.get("lang_slugs") or {}).items():
+            if alt_slug and alt_slug != primary_slug:
+                c.set(
+                    f"cachedblog:slug_alias:{alt_slug}",
+                    primary_slug,
+                    app_settings.CACHE_TIMEOUT,
+                )
+    except Exception:
+        # Cache unavailable — skip gracefully
+        pass
 
 
 def _add_to_list_cache(slug, data, lang):
     """Prepend the new blog to the list cache for `lang` page 1 so it
     shows up immediately without waiting for the background source refresh.
     """
-    c = _cache()
-    list_key = _list_key(lang, 1)
-    raw = c.get(list_key)
-    if isinstance(raw, str):
-        try:
-            existing = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+    try:
+        c = _cache()
+        list_key = _list_key(lang, 1)
+        raw = c.get(list_key)
+        if isinstance(raw, str):
+            try:
+                existing = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                existing = {"blogs": [], "page": 1, "total": 0, "pages": 1, "items": 20}
+        elif isinstance(raw, dict):
+            existing = raw
+        else:
             existing = {"blogs": [], "page": 1, "total": 0, "pages": 1, "items": 20}
-    elif isinstance(raw, dict):
-        existing = raw
-    else:
-        existing = {"blogs": [], "page": 1, "total": 0, "pages": 1, "items": 20}
 
-    # Remove any existing copy of this slug, then prepend
-    blogs = [b for b in existing.get("blogs", []) if b.get("slug") != slug]
-    blogs.insert(0, data)
-    items = existing.get("items") or app_settings.LIST_ITEMS
-    existing["blogs"] = blogs[:items]
-    existing["items"] = items
-    existing["total"] = max(existing.get("total", 0), len(blogs))
-    existing["pages"] = max(1, (existing["total"] + items - 1) // items)
+        # Remove any existing copy of this slug, then prepend
+        blogs = [b for b in existing.get("blogs", []) if b.get("slug") != slug]
+        blogs.insert(0, data)
+        items = existing.get("items") or app_settings.LIST_ITEMS
+        existing["blogs"] = blogs[:items]
+        existing["items"] = items
+        existing["total"] = max(existing.get("total", 0), len(blogs))
+        existing["pages"] = max(1, (existing["total"] + items - 1) // items)
 
-    c.set(list_key, json.dumps(existing, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+        c.set(list_key, json.dumps(existing, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+    except Exception:
+        # Cache unavailable — skip gracefully
+        pass
 
 
 def delete_blog(slug):
     """Remove blog from cache and trigger background list refresh."""
-    _cache().delete(_detail_key(slug))
+    try:
+        _cache().delete(_detail_key(slug))
+    except Exception:
+        pass
     _remove_hash(slug)
     _refresh_all_lists_async()
 
@@ -231,23 +275,30 @@ def get_list_page(lang, page=1, tag=None):
     """
     c = _cache()
     cache_key = _list_key(lang, page) if not tag else f"cachedblog:list:{lang}:{tag}:{page}"
-    cached_data = c.get(cache_key)
 
-    if cached_data:
-        return json.loads(cached_data) if isinstance(cached_data, str) else cached_data
+    try:
+        cached_data = c.get(cache_key)
+        if cached_data:
+            return json.loads(cached_data) if isinstance(cached_data, str) else cached_data
+    except Exception:
+        # Cache unavailable (e.g. Redis timeout) — fall through to source fetch
+        pass
 
     # Cold cache — fetch from source (first request or after cache eviction)
     _track_lang(lang)
     fresh = _fetch_list_from_source(lang, page, tag=tag)
     if fresh is not None:
         if tag:
-            c.set(cache_key, json.dumps(fresh, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
-            for blog_data in fresh.get("blogs", []):
-                _render_markdown_fields(blog_data)
-                slug = blog_data.get("slug")
-                if slug:
-                    c.set(_detail_key(slug), json.dumps(blog_data, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
-            c.set(cache_key, json.dumps(fresh, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+            try:
+                c.set(cache_key, json.dumps(fresh, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+                for blog_data in fresh.get("blogs", []):
+                    _render_markdown_fields(blog_data)
+                    slug = blog_data.get("slug")
+                    if slug:
+                        c.set(_detail_key(slug), json.dumps(blog_data, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+                c.set(cache_key, json.dumps(fresh, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+            except Exception:
+                pass
         else:
             _store_list_page(lang, page, fresh)
         return fresh
@@ -258,22 +309,26 @@ def get_list_page(lang, page=1, tag=None):
 def _store_list_page(lang, page, data):
     """Write a single list page to cache + cache each blog's detail."""
     c = _cache()
-    c.set(_list_key(lang, page), json.dumps(data, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
-    # Remember max pages for this lang
-    total_pages = data.get("pages", 1)
-    c.set(_list_pages_key(lang), total_pages, app_settings.CACHE_TIMEOUT)
-    # Render markdown and warm detail cache for every blog in the page
-    for blog_data in data.get("blogs", []):
-        _render_markdown_fields(blog_data)
-        slug = blog_data.get("slug")
-        if slug:
-            c.set(
-                _detail_key(slug),
-                json.dumps(blog_data, ensure_ascii=False),
-                app_settings.CACHE_TIMEOUT,
-            )
-    # Re-store list page with rendered markdown
-    c.set(_list_key(lang, page), json.dumps(data, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+    try:
+        c.set(_list_key(lang, page), json.dumps(data, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+        # Remember max pages for this lang
+        total_pages = data.get("pages", 1)
+        c.set(_list_pages_key(lang), total_pages, app_settings.CACHE_TIMEOUT)
+        # Render markdown and warm detail cache for every blog in the page
+        for blog_data in data.get("blogs", []):
+            _render_markdown_fields(blog_data)
+            slug = blog_data.get("slug")
+            if slug:
+                c.set(
+                    _detail_key(slug),
+                    json.dumps(blog_data, ensure_ascii=False),
+                    app_settings.CACHE_TIMEOUT,
+                )
+        # Re-store list page with rendered markdown
+        c.set(_list_key(lang, page), json.dumps(data, ensure_ascii=False), app_settings.CACHE_TIMEOUT)
+    except Exception:
+        # Cache unavailable — skip gracefully
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +419,7 @@ def _fetch_list_from_source(lang, page, tag=None, _retries=2):
 
     for attempt in range(_retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=_SOURCE_FETCH_TIMEOUT) as resp:
                 status = resp.status
                 body = resp.read().decode()
 
