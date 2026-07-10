@@ -414,7 +414,7 @@ def _fetch_list_from_source(lang, page, tag=None):
     last_error = None
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=_SOURCE_FETCH_TIMEOUT) as resp:
                 data = json.loads(resp.read().decode())
                 if attempt > 0:
                     logger.info("Succeeded on retry %d: %s", attempt + 1, url)
@@ -429,28 +429,3 @@ def _fetch_list_from_source(lang, page, tag=None):
                 logger.error("Failed to fetch from source %s (after %d attempts): %s", url, attempt + 1, e)
                 return None
 
-    url = f"{base}/api/blogs/{site}/?lang={lang}&page={page}&items={items}"
-    if tag:
-        from urllib.parse import quote
-        url += f"&tag={quote(tag)}"
-
-    req = urllib.request.Request(url)
-    req.add_header("Authorization", f"Bearer {token}")
-
-    last_error = None
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-                if attempt > 0:
-                    logger.info("Succeeded on retry %d: %s", attempt + 1, url)
-                return data
-        except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
-            last_error = e
-            if attempt < 2:
-                wait = 2 ** attempt
-                logger.warning("Fetch attempt %d failed for %s, retrying in %ds: %s", attempt + 1, url, wait, e)
-                time.sleep(wait)
-            else:
-                logger.error("Failed to fetch from source %s (after %d attempts): %s", url, attempt + 1, e)
-                return None
