@@ -390,16 +390,10 @@ def _refresh_all_lists():
 # Source fetch
 # ---------------------------------------------------------------------------
 
-def _fetch_list_from_source(lang, page, tag=None, _retries=2):
-    """Fetch paginated blog list from aiblog API.
+def _fetch_list_from_source(lang, page, tag=None):
+    """Fetch paginated blog list from aiblog API with retry + exponential backoff."""
+    import time
 
-    Handles HTTP errors gracefully:
-    - 404/400: source returned an error for this page (out-of-range, etc.)
-      → return empty listing so the site shows gracefully, not a crash.
-    - 500+: transient server error → retry up to _retries times.
-    - Network/timeout errors → retry with backoff.
-    - JSON decode errors → retry once, then return None.
-    """
     base = app_settings.SOURCE_URL.rstrip("/")
     site = app_settings.SOURCE_SITE
     token = app_settings.SOURCE_TOKEN
@@ -417,94 +411,46 @@ def _fetch_list_from_source(lang, page, tag=None, _retries=2):
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
 
-    for attempt in range(_retries + 1):
+    last_error = None
+    for attempt in range(3):
         try:
-            with urllib.request.urlopen(req, timeout=_SOURCE_FETCH_TIMEOUT) as resp:
-                status = resp.status
-                body = resp.read().decode()
-
-                if status == 404:
-                    # Page out of range or deleted → return empty listing gracefully
-                    logger.info("Source returned 404 for %s (page out of range). Returning empty list.", url)
-                    return {
-                        "blogs": [],
-                        "page": page,
-                        "total": 0,
-                        "pages": page,
-                        "items": items,
-                    }
-
-                if status == 400:
-                    # Bad request (malformed params) → return empty listing
-                    logger.warning("Source returned 400 for %s. Returning empty list.", url)
-                    return {
-                        "blogs": [],
-                        "page": page,
-                        "total": 0,
-                        "pages": page,
-                        "items": items,
-                    }
-
-                if status >= 500:
-                    # Server error — retry
-                    if attempt < _retries:
-                        sleep_time = 0.5 * (2 ** attempt)
-                        logger.warning(
-                            "Source returned %d for %s (attempt %d/%d). Retrying in %.1fs.",
-                            status, url, attempt + 1, _retries + 1, sleep_time
-                        )
-                        time.sleep(sleep_time)
-                        continue
-                    logger.error("Source returned %d after %d retries: %s", status, _retries, url)
-                    return None
-
-                # Success — parse JSON
-                try:
-                    data = json.loads(body)
-                    return data
-                except json.JSONDecodeError:
-                    if attempt < _retries:
-                        logger.warning("JSON decode error for %s (attempt %d), retrying.", url, attempt + 1)
-                        continue
-                    logger.error("JSON decode error for %s after %d retries", url, _retries)
-                    return None
-
-        except urllib.error.HTTPError as e:
-            status = e.code
-            if status in (404, 400):
-                logger.info("Source HTTP %d for %s. Returning empty list.", status, url)
-                return {
-                    "blogs": [],
-                    "page": page,
-                    "total": 0,
-                    "pages": page,
-                    "items": items,
-                }
-            if status >= 500:
-                if attempt < _retries:
-                    sleep_time = 0.5 * (2 ** attempt)
-                    logger.warning(
-                        "Source HTTP %d for %s (attempt %d/%d). Retrying in %.1fs.",
-                        status, url, attempt + 1, _retries + 1, sleep_time
-                    )
-                    time.sleep(sleep_time)
-                    continue
-                logger.error("Source HTTP %d after %d retries: %s", status, _retries, url)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+                if attempt > 0:
+                    logger.info("Succeeded on retry %d: %s", attempt + 1, url)
+                return data
+        except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
+            last_error = e
+            if attempt < 2:
+                wait = 2 ** attempt
+                logger.warning("Fetch attempt %d failed for %s, retrying in %ds: %s", attempt + 1, url, wait, e)
+                time.sleep(wait)
+            else:
+                logger.error("Failed to fetch from source %s (after %d attempts): %s", url, attempt + 1, e)
                 return None
-            # 401, 403, 422 etc — not retryable
-            logger.error("Source HTTP %d for %s: %s", status, url, e)
-            return None
 
-        except (urllib.error.URLError, OSError) as e:
-            if attempt < _retries:
-                sleep_time = 0.5 * (2 ** attempt)
-                logger.warning(
-                    "Network error fetching %s (attempt %d/%d): %s. Retrying in %.1fs.",
-                    url, attempt + 1, _retries + 1, e, sleep_time
-                )
-                time.sleep(sleep_time)
-                continue
-            logger.error("Failed to fetch from source after %d retries %s: %s", _retries, url, e)
-            return None
+    url = f"{base}/api/blogs/{site}/?lang={lang}&page={page}&items={items}"
+    if tag:
+        from urllib.parse import quote
+        url += f"&tag={quote(tag)}"
 
-    return None
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {token}")
+
+    last_error = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+                if attempt > 0:
+                    logger.info("Succeeded on retry %d: %s", attempt + 1, url)
+                return data
+        except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
+            last_error = e
+            if attempt < 2:
+                wait = 2 ** attempt
+                logger.warning("Fetch attempt %d failed for %s, retrying in %ds: %s", attempt + 1, url, wait, e)
+                time.sleep(wait)
+            else:
+                logger.error("Failed to fetch from source %s (after %d attempts): %s", url, attempt + 1, e)
+                return None
