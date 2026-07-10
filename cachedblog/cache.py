@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 import urllib.request
 import urllib.error
 
@@ -334,8 +335,16 @@ def _refresh_all_lists():
 # Source fetch
 # ---------------------------------------------------------------------------
 
-def _fetch_list_from_source(lang, page, tag=None):
-    """Fetch paginated blog list from aiblog API."""
+def _fetch_list_from_source(lang, page, tag=None, _retries=2):
+    """Fetch paginated blog list from aiblog API.
+
+    Handles HTTP errors gracefully:
+    - 404/400: source returned an error for this page (out-of-range, etc.)
+      → return empty listing so the site shows gracefully, not a crash.
+    - 500+: transient server error → retry up to _retries times.
+    - Network/timeout errors → retry with backoff.
+    - JSON decode errors → retry once, then return None.
+    """
     base = app_settings.SOURCE_URL.rstrip("/")
     site = app_settings.SOURCE_SITE
     token = app_settings.SOURCE_TOKEN
@@ -353,10 +362,94 @@ def _fetch_list_from_source(lang, page, tag=None):
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {token}")
 
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-            return data
-    except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
-        logger.error("Failed to fetch from source %s: %s", url, e)
-        return None
+    for attempt in range(_retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                status = resp.status
+                body = resp.read().decode()
+
+                if status == 404:
+                    # Page out of range or deleted → return empty listing gracefully
+                    logger.info("Source returned 404 for %s (page out of range). Returning empty list.", url)
+                    return {
+                        "blogs": [],
+                        "page": page,
+                        "total": 0,
+                        "pages": page,
+                        "items": items,
+                    }
+
+                if status == 400:
+                    # Bad request (malformed params) → return empty listing
+                    logger.warning("Source returned 400 for %s. Returning empty list.", url)
+                    return {
+                        "blogs": [],
+                        "page": page,
+                        "total": 0,
+                        "pages": page,
+                        "items": items,
+                    }
+
+                if status >= 500:
+                    # Server error — retry
+                    if attempt < _retries:
+                        sleep_time = 0.5 * (2 ** attempt)
+                        logger.warning(
+                            "Source returned %d for %s (attempt %d/%d). Retrying in %.1fs.",
+                            status, url, attempt + 1, _retries + 1, sleep_time
+                        )
+                        time.sleep(sleep_time)
+                        continue
+                    logger.error("Source returned %d after %d retries: %s", status, _retries, url)
+                    return None
+
+                # Success — parse JSON
+                try:
+                    data = json.loads(body)
+                    return data
+                except json.JSONDecodeError:
+                    if attempt < _retries:
+                        logger.warning("JSON decode error for %s (attempt %d), retrying.", url, attempt + 1)
+                        continue
+                    logger.error("JSON decode error for %s after %d retries", url, _retries)
+                    return None
+
+        except urllib.error.HTTPError as e:
+            status = e.code
+            if status in (404, 400):
+                logger.info("Source HTTP %d for %s. Returning empty list.", status, url)
+                return {
+                    "blogs": [],
+                    "page": page,
+                    "total": 0,
+                    "pages": page,
+                    "items": items,
+                }
+            if status >= 500:
+                if attempt < _retries:
+                    sleep_time = 0.5 * (2 ** attempt)
+                    logger.warning(
+                        "Source HTTP %d for %s (attempt %d/%d). Retrying in %.1fs.",
+                        status, url, attempt + 1, _retries + 1, sleep_time
+                    )
+                    time.sleep(sleep_time)
+                    continue
+                logger.error("Source HTTP %d after %d retries: %s", status, _retries, url)
+                return None
+            # 401, 403, 422 etc — not retryable
+            logger.error("Source HTTP %d for %s: %s", status, url, e)
+            return None
+
+        except (urllib.error.URLError, OSError) as e:
+            if attempt < _retries:
+                sleep_time = 0.5 * (2 ** attempt)
+                logger.warning(
+                    "Network error fetching %s (attempt %d/%d): %s. Retrying in %.1fs.",
+                    url, attempt + 1, _retries + 1, e, sleep_time
+                )
+                time.sleep(sleep_time)
+                continue
+            logger.error("Failed to fetch from source after %d retries %s: %s", _retries, url, e)
+            return None
+
+    return None
