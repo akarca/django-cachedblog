@@ -43,7 +43,9 @@ class CachedBlogSitemap(Sitemap):
         langs = _get_known_langs()
         if not langs:
             langs = {"en"}
-        for lang in langs:
+        # Sorted: the sitemap may be paginated, and set iteration order is not
+        # stable across processes, which would shuffle URLs between pages.
+        for lang in sorted(langs):
             page = 1
             while True:
                 data = get_list_page(lang, page=page)
