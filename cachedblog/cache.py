@@ -337,13 +337,24 @@ def _store_list_page(lang, page, data):
 
 _refresh_lock = threading.Lock()
 _refresh_running = False
+_refresh_pending = False
+_last_refresh_end = 0.0
 
 
 def _refresh_all_lists_async():
-    """Spawn a background thread to refresh listing cache. Skips if already running."""
-    global _refresh_running
+    """Ask for a listing-cache refresh in a background thread.
+
+    A full refresh walks every page of every known language, so on a busy push
+    feed it must not run back to back — one cycle can easily outlast the gap
+    between two pushes, leaving the refresh thread running permanently and
+    holding the GIL against the web workers. Requests that arrive while a
+    refresh is running (or during the cooldown after one) are coalesced into a
+    single follow-up cycle.
+    """
+    global _refresh_running, _refresh_pending
     with _refresh_lock:
         if _refresh_running:
+            _refresh_pending = True
             return
         _refresh_running = True
     t = threading.Thread(target=_refresh_all_lists_guarded, daemon=True)
@@ -351,13 +362,28 @@ def _refresh_all_lists_async():
 
 
 def _refresh_all_lists_guarded():
-    """Wrapper that resets the running flag when done."""
-    global _refresh_running
+    """Run refresh cycles, spaced by REFRESH_MIN_INTERVAL, until none pending."""
+    global _refresh_running, _refresh_pending, _last_refresh_end
     try:
-        _refresh_all_lists()
-    finally:
+        while True:
+            cooldown = app_settings.REFRESH_MIN_INTERVAL - (time.monotonic() - _last_refresh_end)
+            if cooldown > 0:
+                time.sleep(cooldown)
+            with _refresh_lock:
+                _refresh_pending = False
+            try:
+                _refresh_all_lists()
+            finally:
+                _last_refresh_end = time.monotonic()
+            with _refresh_lock:
+                if not _refresh_pending:
+                    _refresh_running = False
+                    return
+    except BaseException:
         with _refresh_lock:
             _refresh_running = False
+            _refresh_pending = False
+        raise
 
 
 def _refresh_all_lists():

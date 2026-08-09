@@ -31,8 +31,15 @@ class CachedBlogSitemap(Sitemap):
     priority = 0.8
 
     def items(self):
-        """Return all cached blog dicts across all known languages."""
-        all_blogs = []
+        """Return one lightweight entry per cached blog, across all languages.
+
+        Only `slug` and `release_date` are ever read (by location/lastmod), so
+        every other field is dropped as each source page is consumed. Keeping
+        the full dicts would hold every blog of every language — including the
+        rendered HTML of `content` — in memory at once, which costs hundreds of
+        MB per sitemap request on a multi-language site.
+        """
+        items = []
         langs = _get_known_langs()
         if not langs:
             langs = {"en"}
@@ -43,11 +50,14 @@ class CachedBlogSitemap(Sitemap):
                 blogs = data.get("blogs", [])
                 if not blogs:
                     break
-                all_blogs.extend(blogs)
+                items.extend(
+                    {"slug": b.get("slug", ""), "release_date": b.get("release_date", "")}
+                    for b in blogs
+                )
                 if page >= data.get("pages", 1):
                     break
                 page += 1
-        return all_blogs
+        return items
 
     def location(self, item):
         return f"/{item.get('slug', '')}/"

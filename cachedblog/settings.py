@@ -14,6 +14,9 @@ Override in your project's settings.py:
     CACHEDBLOG_SOURCE_SITE = "techsciverse"           # site slug on aiblog
     CACHEDBLOG_SOURCE_TOKEN = "aiblog-api-token"      # Site.api_token on aiblog
     CACHEDBLOG_LIST_ITEMS = 10                        # items per page
+
+    # Minimum seconds between two full listing refreshes (0 = no throttling)
+    CACHEDBLOG_REFRESH_MIN_INTERVAL = 900
 """
 
 from django.conf import settings
@@ -28,3 +31,4 @@ SOURCE_URL = getattr(settings, "CACHEDBLOG_SOURCE_URL", "")
 SOURCE_SITE = getattr(settings, "CACHEDBLOG_SOURCE_SITE", "")
 SOURCE_TOKEN = getattr(settings, "CACHEDBLOG_SOURCE_TOKEN", "")
 LIST_ITEMS = getattr(settings, "CACHEDBLOG_LIST_ITEMS", 10)
+REFRESH_MIN_INTERVAL = getattr(settings, "CACHEDBLOG_REFRESH_MIN_INTERVAL", 900)
